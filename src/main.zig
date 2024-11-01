@@ -2,14 +2,21 @@ const rl = @import("raylib");
 const std = @import("std");
 
 const rnd = std.crypto.random;
+const print = std.debug.print;
 const Vec2 = rl.Vector2;
 
-const WIDTH = 800;
-const HEIGHT = 800;
-const AGENTS = 600;
-const EVAPORATION = 3;
+const WIDTH = 1000;
+const HEIGHT = WIDTH;
+const AGENTS = WIDTH * 5;
+const EVAPORATION = SPEED;
 
-const SPEED = 3;
+const SPEED = 8;
+
+const Start = enum {
+    Center,
+    Random,
+    Border,
+};
 
 const Vec2i = struct {
     x: i32,
@@ -22,27 +29,40 @@ const Agent = struct {
     rotation: f32,
 };
 
-const Pix = struct {
-    pos: Vec2,
-    intesity: u8,
-};
-
-fn newAgent() Agent {
-    const alpha: f32 = @floatFromInt(rnd.intRangeAtMost(i32, 0, 359));
-    const vel = Vec2.init(SPEED * std.math.cos(alpha), SPEED * std.math.sin(alpha));
-    return .{ .pos = Vec2.init(WIDTH / 2, HEIGHT / 2), .vel = vel, .rotation = alpha };
+fn newAgent(start: Start) Agent {
+    var alpha: f32 = @as(f32, @floatFromInt(rnd.intRangeAtMost(i32, 0, 359))) + rnd.float(f32);
+    var vel = Vec2.init(SPEED * std.math.cos(alpha), SPEED * std.math.sin(alpha));
+    if (start == Start.Random) {
+        const x: f32 = @floatFromInt(rnd.intRangeAtMost(i32, 0, WIDTH));
+        const y: f32 = @floatFromInt(rnd.intRangeAtMost(i32, 0, HEIGHT));
+        return .{ .pos = Vec2.init(x, y), .vel = vel, .rotation = alpha };
+    } else if (start == Start.Center) {
+        return .{ .pos = Vec2.init(WIDTH / 2, HEIGHT / 2), .vel = vel, .rotation = alpha };
+    } else if (start == Start.Border) {
+        var pos = Vec2.init(std.math.cos(@mod(alpha, 90)) + WIDTH / 2, std.math.sin(@mod(alpha, 90)) + WIDTH / 2);
+        if (alpha >= 180) {
+            alpha -= 180;
+        } else alpha += 180;
+        vel = Vec2.init(SPEED * std.math.cos(alpha), SPEED * std.math.sin(alpha));
+        if (vel.x < 0) {
+            pos.x += -pos.x;
+        } else {
+            pos.x += pos.x;
+        }
+        pos.x -= pos.x / vel.x;
+        pos.y -= pos.y / vel.y;
+        return .{ .pos = pos, .vel = vel, .rotation = alpha };
+    } else {
+        unreachable;
+    }
 }
 
 fn moveAgents(agents: *[]Agent, field: *std.AutoArrayHashMap(Vec2i, u8)) !void {
     var agent: *Agent = undefined;
-    const offset = 1;
     for (0..agents.len) |i| {
         agent = &agents.*[i];
-        for (0..3) |x| {
-            for (0..3) |y| {
-                try field.put(Vec2i{ .x = @intFromFloat(agent.pos.x + @as(f32, @floatFromInt(x)) - offset), .y = @intFromFloat(agent.pos.y + @as(f32, @floatFromInt(y)) - offset) }, 255);
-            }
-        }
+        try field.put(.{ .x = @intFromFloat(agent.pos.x), .y = @intFromFloat(agent.pos.y) }, 255);
+
         agent.pos = rl.math.vector2Add(agent.pos, agent.vel);
         if (agent.pos.x < 0 or agent.pos.x > WIDTH) {
             agent.vel.x *= -1;
@@ -54,29 +74,45 @@ fn moveAgents(agents: *[]Agent, field: *std.AutoArrayHashMap(Vec2i, u8)) !void {
     }
 }
 
-fn sensor(agents: *[]Agent, field: std.AutoArrayHashMap(Vec2i, u8)) void {
+fn sensor(agents: *[]Agent) !void {
     var agent: *Agent = undefined;
     var t: Vec2 = undefined;
     var r: [3]i32 = undefined;
     var vel: Vec2 = undefined;
+    const img = rl.loadImageFromScreen();
     for (0..agents.len) |i| {
         var j: usize = 0;
         agent = &agents.*[i];
-        t = rl.math.vector2Add(agent.pos, rl.math.vector2Scale(agent.vel, 2));
-        r[j] = field.get(Vec2i{ .x = @intFromFloat(t.x), .y = @intFromFloat(t.y) }) orelse 0;
+        t = rl.math.vector2Add(agent.pos, rl.math.vector2Scale(agent.vel, SPEED * 2));
+        var x: i32 = 0;
+        var y: i32 = 0;
+        var pix: rl.Color = undefined;
         for (0..3) |k| {
             for (0..3) |l| {
-                r[j] += field.get(Vec2i{ .x = @intFromFloat(t.x + @as(f32, @floatFromInt(k)) - 1), .y = @intFromFloat(t.y + @as(f32, @floatFromInt(l)) - 1) }) orelse 0;
+                x = @intFromFloat(t.x + @as(f32, @floatFromInt(k)) - 2);
+                y = @intFromFloat(t.y + @as(f32, @floatFromInt(l)) - 2);
+                if (x > -1 and x < WIDTH and y > -1 and y < HEIGHT) {
+                    pix = rl.getImageColor(img, x, y);
+                    if (pix.b != 0) {
+                        r[j] += @intCast(rl.getImageColor(img, x, y).b);
+                    }
+                }
             }
         }
         r[j] = @divTrunc(r[j], 9);
         j += 1;
         vel = Vec2.init(SPEED * std.math.cos(agent.rotation + 30), SPEED * std.math.sin(agent.rotation + 30));
         t = rl.math.vector2Add(agent.pos, rl.math.vector2Scale(vel, 2));
-        r[j] = field.get(Vec2i{ .x = @intFromFloat(t.x), .y = @intFromFloat(t.y) }) orelse 0;
         for (0..3) |k| {
             for (0..3) |l| {
-                r[j] += field.get(Vec2i{ .x = @intFromFloat(t.x + @as(f32, @floatFromInt(k)) - 1), .y = @intFromFloat(t.y + @as(f32, @floatFromInt(l)) - 1) }) orelse 0;
+                x = @intFromFloat(t.x + @as(f32, @floatFromInt(k)) - 1);
+                y = @intFromFloat(t.y + @as(f32, @floatFromInt(l)) - 1);
+                if (x > -1 and x < WIDTH and y > -1 and y < HEIGHT) {
+                    pix = rl.getImageColor(img, x, y);
+                    if (pix.b != 0) {
+                        r[j] += @intCast(rl.getImageColor(img, x, y).a);
+                    }
+                }
             }
         }
 
@@ -84,10 +120,16 @@ fn sensor(agents: *[]Agent, field: std.AutoArrayHashMap(Vec2i, u8)) void {
         j += 1;
         vel = Vec2.init(SPEED * std.math.cos(agent.rotation - 30), SPEED * std.math.sin(agent.rotation - 30));
         t = rl.math.vector2Add(agent.pos, rl.math.vector2Scale(vel, 2));
-        r[j] = field.get(Vec2i{ .x = @intFromFloat(t.x), .y = @intFromFloat(t.y) }) orelse 0;
         for (0..3) |k| {
             for (0..3) |l| {
-                r[j] += field.get(Vec2i{ .x = @intFromFloat(t.x + @as(f32, @floatFromInt(k)) - 1), .y = @intFromFloat(t.y + @as(f32, @floatFromInt(l)) - 1) }) orelse 0;
+                x = @intFromFloat(t.x + @as(f32, @floatFromInt(k)) - 1);
+                y = @intFromFloat(t.y + @as(f32, @floatFromInt(l)) - 1);
+                if (x > -1 and x < WIDTH and y > -1 and y < HEIGHT) {
+                    pix = rl.getImageColor(img, x, y);
+                    if (pix.b != 0) {
+                        r[j] += @intCast(rl.getImageColor(img, x, y).b);
+                    }
+                }
             }
         }
         r[j] = @divTrunc(r[j], 9);
@@ -116,20 +158,15 @@ fn sensor(agents: *[]Agent, field: std.AutoArrayHashMap(Vec2i, u8)) void {
     }
 }
 
-fn newPix() Pix {
-    return .{ .pos = Vec2.init(0, 0), .intesity = 0 };
-}
-
-fn processField(field: *std.AutoArrayHashMap(Vec2i, u8)) void {
-    var white = rl.Color.white;
+fn processField(field: *std.AutoArrayHashMap(Vec2i, u8), pix: rl.Texture2D) void {
+    var primary = rl.Color.black;
     var it = field.*.iterator();
     for (0..field.count()) |_| {
         const v = it.next();
         if (v != null) {
             const t = v.?;
-            white.a = t.value_ptr.*;
-            rl.drawPixelV(Vec2.init(@floatFromInt(t.key_ptr.*.x), @floatFromInt(t.key_ptr.*.y)), white);
-
+            primary.b = t.value_ptr.*;
+            pix.drawV(Vec2.init(@floatFromInt(t.key_ptr.*.x), @floatFromInt(t.key_ptr.*.y)), primary);
             if (@as(i32, t.value_ptr.*) - EVAPORATION < 0) {
                 _ = field.swapRemove(t.key_ptr.*);
             } else {
@@ -142,8 +179,9 @@ fn processField(field: *std.AutoArrayHashMap(Vec2i, u8)) void {
 pub fn main() !void {
     var a: [AGENTS]Agent = undefined;
     for (0..AGENTS) |i| {
-        a[i] = newAgent();
+        a[i] = newAgent(Start.Border);
     }
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -152,13 +190,15 @@ pub fn main() !void {
     var agents: []Agent = a[0..];
     rl.initWindow(WIDTH, HEIGHT, "Slime");
     rl.setTargetFPS(60);
+    const image = rl.genImageColor(SPEED, SPEED, .{ .r = 0, .g = 0, .b = 255, .a = 255 });
+    const pix = rl.loadTextureFromImage(image);
     while (!rl.windowShouldClose()) {
         rl.beginDrawing();
         defer rl.endDrawing();
         rl.drawFPS(10, 10);
         rl.clearBackground(rl.Color.black);
         try moveAgents(&agents, &field);
-        processField(&field);
-        sensor(&agents, field);
+        processField(&field, pix);
+        try sensor(&agents);
     }
 }
